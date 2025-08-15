@@ -1,0 +1,12 @@
+{
+    "envLong": "Development",
+    "envShort": "dev",
+    "location": "uksouth",
+    "locationShort": "uks",
+    "productLong": "Cascade",
+    "productShort": "cas",
+    "workload":"non-core",
+    "prodref": "HCMCASCAP0004",
+    "managedby":"terraform"
+
+  }

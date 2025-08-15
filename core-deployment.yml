@@ -1,0 +1,29 @@
+trigger: none
+
+pool:
+  vmImage: "windows-latest"
+
+parameters:
+  - name: Environment
+    type: string
+    default: "select the environment"
+    values:
+      - "dev"
+      - "staging"
+      - "prod"
+  
+variables:
+  - template: vars/vars-global.yml
+
+stages:
+
+  - stage: "DeployCoreInfra"
+    displayName: "Deploy Core Infrastructure for ${{ parameters.Environment }}"
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+    jobs:
+      - template: Terraform/core/core.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}

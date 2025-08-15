@@ -1,0 +1,28 @@
+trigger: none
+
+pool:
+  vmImage: "windows-latest"
+
+parameters:
+  - name: Environment
+    type: string
+    default: "select the environment"
+    values:
+      - "dev"
+      - "staging"
+      - "prod"
+
+variables:
+  - template: vars/vars-global.yml
+
+stages:
+  - stage: "DeployRSV"
+    displayName: "Deploy RSV for ${{ parameters.Environment }}"
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+    jobs:
+      - template: Terraform/backup-rsv/rsv.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}

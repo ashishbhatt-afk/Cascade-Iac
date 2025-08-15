@@ -1,0 +1,19 @@
+variables:
+  envLong: Development
+  envShort: dev
+  
+
+  appvmprefix: D5CASWINAPP
+  iisvmprefix: D5CASWINWEB
+  sqlvmprefix: D5CASWINSQL
+  
+  appkey: app.dev.terraform.tfstate
+  corekey: core.dev.terraform.tfstate
+  iiskey: iis.dev.terraform.tfstate
+  rbqkey: rbq.dev.terraform.tfstate
+  rsvkey: rsv.dev.terraform.tfstate
+  sqlkey: sql.dev.terraform.tfstate
+  sqlmikey: sqlmi.dev.terraform.tfstate
+  storagekey: storage.dev.terraform.tfstate
+
+

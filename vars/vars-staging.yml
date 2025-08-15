@@ -1,0 +1,17 @@
+
+variables:
+  envLong: Staging
+  envShort: stag
+
+  appvmprefix: D5CASWINAPP
+  iisvmprefix: D5CASWINWEB
+  sqlvmprefix: D5CASWINSQL
+  
+  appkey: app.staging.terraform.tfstate
+  corekey: core.staging.terraform.tfstate
+  iiskey: iis.staging.terraform.tfstate
+  rbqkey: rbq.staging.terraform.tfstate
+  rsvkey: rsv.staging.terraform.tfstate
+  sqlkey: sql.staging.terraform.tfstate
+  sqlmikey: sqlmi.staging.terraform.tfstate
+  storagekey: storage.staging.terraform.tfstate

@@ -1,0 +1,24 @@
+# File: pipelines/steps-transformjson.yml
+
+parameters:
+  - name: sourcePath
+    type: string
+
+  - name: targetPath
+    type: string
+    default: ""
+
+  - name: transformations
+    type: string
+
+steps:
+  - task: PowerShell@2
+    displayName: Transform ${{ parameters.sourcePath }}
+    inputs:
+      filePath: scripts/transformJson.ps1
+      pwsh: true
+      targetType: filePath
+      arguments: >-
+        -SourcePath '${{ parameters.sourcePath }}'
+        -TargetPath '${{ parameters.targetPath }}'
+        -Transformations '${{ parameters.transformations }}'

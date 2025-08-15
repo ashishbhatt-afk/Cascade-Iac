@@ -1,0 +1,69 @@
+trigger: none
+
+parameters:
+  - name: runBranch
+    type: string
+    default: 'refs/heads/main'
+
+  - name: poolName
+    type: string
+    default: 'cascade-mdp-pool'
+    values:
+      - cascade-mdp-pool
+      - windows-latest
+
+variables:
+  - template: vars/vars-global.yml
+  - group: 'cascade to azure global'
+
+resources:
+  pipelines:
+    - pipeline: 'Non-Core-Infra-Deployment'
+      source: 'Non-Core-Infra-Deployment'
+      trigger:
+        branches:
+          include:
+            - main
+
+stages:
+  - stage: RunPostVMDeploymentTasks
+    jobs:
+      - job: RunPostVMDeploymentTasksOnIIS
+        pool:
+          ${{ if eq(parameters.poolName, 'cascade-mdp-pool') }}:
+            name: cascade-mdp-pool
+          ${{ if eq(parameters.poolName, 'windows-latest') }}:
+            vmImage: 'windows-latest'
+        steps:
+          - template: Templates/set-sql-lang.yml
+            parameters:
+              planArtifactName: 'IIS Plan'
+              planFileName: 'IISplan.json'
+              resultFileName: 'iis_vm_id_info.json'
+              artifactName: 'iisvm-sql-data'
+              pipelineId: 301
+              runBranch: ${{ parameters.runBranch }}
+              serviceconnection: ${{ variables.subscription }}
+              adoproject: ${{ variables.adoproject }}
+              adoorg: ${{ variables.adoorg }}
+              adopattoken: $(adopattoken)
+              
+      - job: RunPostVMDeploymentTasksOnApp
+        pool:
+          ${{ if eq(parameters.poolName, 'cascade-mdp-pool') }}:
+            name: cascade-mdp-pool
+          ${{ if eq(parameters.poolName, 'windows-latest') }}:
+            vmImage: 'windows-latest'
+        steps:
+          - template: Templates/set-sql-lang.yml
+            parameters:
+              planArtifactName: 'APP Plan'
+              planFileName: 'APPplan.json'
+              resultFileName: 'app_vm_id_info.json'
+              artifactName: 'appvm-sql-data'
+              pipelineId: 301
+              runBranch: ${{ parameters.runBranch }}
+              serviceconnection: ${{ variables.subscription }}
+              adoproject: ${{ variables.adoproject }}
+              adoorg: ${{ variables.adoorg }}
+              adopattoken: $(adopattoken)

@@ -1,0 +1,177 @@
+parameters:
+  - name: subscription
+
+jobs:
+  # Job 1: Plan_AVD_Server
+  - job: Plan_AVD_Server
+    dependsOn: deployAVD
+    steps:
+      # Install the latest Terraform version
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      # Initialize Terraform with Azure backend and environment variables
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for AVD server"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/avdserver"
+          commandOptions: >
+            -reconfigure
+          backendAzureRmUseEnvironmentVariablesForAuthentication: true
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(avdkey)"
+
+      # Validate the Terraform configuration
+      - task: TerraformTaskV4@4
+        displayName: "terraform validate for AVD server"
+        inputs:
+          provider: "azurerm"
+          command: "validate"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/avdserver"
+
+      - task: DownloadPipelineArtifact@2
+        displayName: "Download Image ID Artifact"
+        inputs:
+          source: 'specific'                     
+          project: 'Cascade Underlying Platform'
+          pipeline: 295
+          runVersion: 'latestFromBranch'
+          runBranch: 'refs/heads/main'
+          artifact: 'image-id'
+          path: '$(Pipeline.Workspace)'
+
+      # Set IMAGE_ID variable from artifact file
+      - task: PowerShell@2
+        displayName: "Set IMAGE_ID variable"
+        inputs:
+          targetType: filePath
+          filePath: $(build.sourcesDirectory)/scripts/set-image-id.ps1
+          pwsh: true
+          arguments: >
+            -FilePath "$(Pipeline.Workspace)/image-id.txt"
+
+
+      # Run Terraform plan and output to a plan file
+      - task: TerraformTaskV4@4
+        displayName: "terraform plan for AVD server"
+        inputs:
+          provider: "azurerm"
+          command: "plan"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/avdserver"
+          commandOptions: >
+            -out AVDtf.plan
+            -var "source_image_id=$(IMAGE_ID)"
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"
+
+      # Convert the Terraform plan to JSON format for further processing
+      - task: TerraformTaskV4@4
+        name: TerraformShow
+        displayName: Terraform Show
+        inputs:
+          provider: 'azurerm'
+          environmentServiceNameAzureRM: '${{ parameters.subscription }}'
+          command: 'show'
+          commandOptions: 'AVDtf.plan'
+          outputTo: 'file'
+          outputFormat: 'json'
+          fileName: '$(Build.ArtifactStagingDirectory)/AVDplan.json'
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/avdserver"
+
+      # Sanitize the Terraform plan JSON to mask sensitive data, then copy as tfgraph
+      - task: PowerShell@2
+        displayName: "Sanitize Terraform Plan with PowerShell"
+        inputs:
+          filePath: scripts/sanitize-tfplan.ps1
+          pwsh: true
+          arguments: >
+            -JsonFile "$(Build.ArtifactStagingDirectory)/AVDplan.json"
+            -TfgraphFile "$(Build.ArtifactStagingDirectory)/AVDplan.tfgraph" 
+
+      # Publish the sanitized Terraform plan JSON as a tfgraph artifact
+      - task: PublishPipelineArtifact@1
+        displayName: "Publish Terraform Graph"
+        inputs:
+          targetPath: "$(Build.ArtifactStagingDirectory)/AVDplan.tfgraph"
+          artifact: 'AVDplan.tfgraph'
+          publishLocation: 'pipeline'
+
+  # Job 2: waitForApproval_AVD
+  - job: waitForApproval_AVD
+    dependsOn: Plan_AVD_Server
+    displayName: Manual Validation before terraform_apply
+    pool: server
+    timeoutInMinutes: 60
+    steps:
+      # Manual approval step before applying Terraform changes
+      - task: ManualValidation@1
+        timeoutInMinutes: 60
+        inputs:
+          notifyUsers: |
+            ashish.bhatt@iris.co.uk
+          instructions: "Please validate the build configuration and resume"
+          onTimeout: "reject"
+          allowApproversToApproveTheirOwnRuns: true
+
+  # Job 3: TerraformApply_AVD
+  - job: TerraformApply_AVD
+    dependsOn: waitForApproval_AVD
+    displayName: "Terraform apply for AVD server"
+    steps:
+      # Install the latest Terraform version
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - task: DownloadPipelineArtifact@2
+        displayName: "Download Image ID Artifact"
+        inputs:
+          source: 'specific'                     
+          project: 'Cascade Underlying Platform'
+          pipeline: 295
+          runVersion: 'latestFromBranch'
+          runBranch: 'refs/heads/main'
+          artifact: 'image-id'
+          path: '$(Pipeline.Workspace)'
+
+      # Set IMAGE_ID variable from artifact file
+      - task: PowerShell@2
+        displayName: "Set IMAGE_ID variable"
+        inputs:
+          targetType: filePath
+          filePath: $(build.sourcesDirectory)/scripts/set-image-id.ps1
+          pwsh: true
+          arguments: >
+            -FilePath "$(Pipeline.Workspace)/image-id.txt"
+
+      # Initialize Terraform again before apply
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for AVD server"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/avdserver"
+          commandOptions: >
+            -reconfigure
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(avdkey)"
+
+      # Apply the Terraform plan to deploy resources
+      - task: TerraformTaskV4@4
+        displayName: "Terraform apply for AVD server"
+        inputs:
+          provider: "azurerm"
+          command: "apply"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/avdserver"
+          commandOptions: >
+            -auto-approve
+            -var "source_image_id=$(IMAGE_ID)"
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"

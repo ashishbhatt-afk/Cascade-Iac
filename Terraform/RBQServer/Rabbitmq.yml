@@ -1,0 +1,159 @@
+parameters:
+  - name: subscription
+  - name: environment
+  - name: rbqvmcount
+
+jobs:
+  - job: Plan_RBQ_Server
+    dependsOn: DeployRabbitMQ
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} RBQ server"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/RBQServer"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "rbq_count=${{ parameters.rbqvmcount }}"
+          backendAzureRmUseEnvironmentVariablesForAuthentication: true
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(rbqkey)"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform validate for ${{ parameters.environment }} RBQ resource"
+        inputs:
+          provider: "azurerm"
+          command: "validate"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/RBQServer"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform plan for ${{ parameters.environment }} RBQ server"
+        inputs:
+          provider: "azurerm"
+          command: "plan"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/RBQServer"
+          commandOptions: >
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "rbq_count=${{ parameters.rbqvmcount }}"
+            -out RBQtf.plan
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"
+
+        
+      - task: TerraformTaskV4@4
+        name: TerraformShow
+        displayName: Terraform Show
+        inputs:
+          provider: 'azurerm'
+          environmentServiceNameAzureRM: '${{ parameters.subscription }}'
+          command: 'show'
+          commandOptions: 'RBQtf.plan'
+          outputTo: 'file'
+          outputFormat: 'json'
+          fileName: '$(Build.ArtifactStagingDirectory)/RBQplan.json'
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/RBQServer"
+
+      # Sanitize the Terraform plan JSON to mask sensitive data, then copy as tfgraph
+
+      - task: PowerShell@2
+        displayName: "Sanitize Terraform Plan with PowerShell"
+        inputs:
+          filePath: scripts/sanitize-tfplan.ps1
+          pwsh: true
+          arguments: >
+            -JsonFile "$(Build.ArtifactStagingDirectory)/RBQplan.json"
+            -TfgraphFile "$(Build.ArtifactStagingDirectory)/RBQplan.tfgraph" 
+      
+
+      # Publish Plan File as Artifact
+      # - task: PublishPipelineArtifact@1
+      #   displayName: "Publish Terraform Plan"
+      #   inputs:
+      #     targetPath: "$(build.sourcesDirectory)/Terraform/RBQserver/RBQtf.plan"
+      #     artifact: 'RBQtf.plan'
+      #     publishLocation: 'pipeline'
+
+      # Publish Graph File as Artifact
+      - task: PublishPipelineArtifact@1
+        displayName: "Publish Terraform Show"
+        inputs:
+          targetPath: "$(Build.ArtifactStagingDirectory)/RBQplan.tfgraph"
+          artifact: 'RBQplan.tfgraph'
+          publishLocation: 'pipeline'
+
+#  Manual Validation works on Job level not at task level so we need to create a separate job for manual validation
+# otherwise it will not work as expected and it will be triggered at the beginning of the job
+  - job: waitForApproval_RBQ
+    dependsOn: Plan_RBQ_Server
+    displayName: Manual Validation before terraform_apply
+    pool: server
+    timeoutInMinutes: 60
+    steps:
+      - task: ManualValidation@1
+        timeoutInMinutes: 60
+        inputs:
+          notifyUsers: |
+            ashish.bhatt@iris.co.uk
+          instructions: "Please validate the build configuration and resume"
+          onTimeout: "reject"
+          allowApproversToApproveTheirOwnRuns: true
+
+  - job: TeraformApply_RBQ
+    dependsOn: waitForApproval_RBQ
+    displayName: "Terraform apply for ${{ parameters.environment }} RBQ server"
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} RBQ server"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/RBQServer"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "rbq_count=${{ parameters.rbqvmcount }}"
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(rbqkey)"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform apply for ${{ parameters.environment }} RBQ server"
+        inputs:
+          provider: "azurerm"
+          command: "apply"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/RBQServer"
+          commandOptions: >
+            -auto-approve
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "rbq_count=${{ parameters.rbqvmcount }}"           
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"

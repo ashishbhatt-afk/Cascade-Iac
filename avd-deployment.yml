@@ -1,0 +1,21 @@
+trigger: none
+
+pool:
+  vmImage: "windows-latest"
+
+
+variables:
+  - template: vars/vars-global.yml
+
+stages:
+
+  - stage: "DeployAVD"
+    displayName: "Deploy the AVD"
+    variables:
+      - template: vars/vars-global.yml
+    jobs: 
+      - job: deployAVD
+        displayName: "Deploy AVD"
+      - template: Terraform/avdserver/avdserver.yml
+        parameters:
+          subscription: $(subscription)

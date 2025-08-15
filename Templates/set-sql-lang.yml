@@ -1,0 +1,96 @@
+parameters:
+  - name: planArtifactName
+    type: string
+  - name: planFileName
+    type: string
+  - name: resultFileName
+    type: string
+  - name: artifactName
+    type: string
+  - name: pipelineId
+    type: number
+  - name: runBranch
+    type: string
+  - name: serviceconnection
+    type: string
+  - name: adoproject
+    type: string
+  - name: adoorg
+    type: string
+  - name: adopattoken
+    type: string
+
+steps:
+  
+- task: DownloadPipelineArtifact@2
+  displayName: "Download Plan Artifact - ${{ parameters.artifactName }}"
+  inputs:
+    source: 'specific'
+    project: ${{ parameters.adoproject }}
+    pipeline: ${{ parameters.pipelineId }}
+    runVersion: 'latestFromBranch'
+    runBranch: ${{ parameters.runBranch }}
+    artifact: ${{ parameters.planArtifactName }}
+    path: '$(Pipeline.Workspace)'
+
+- task: AzureCLI@2
+  displayName: "Extract VM and SQL MI Info from Plan json file"
+  inputs:
+    azureSubscription: ${{ parameters.serviceconnection }}
+    scriptType: 'ps'
+    scriptLocation: 'scriptPath'
+    scriptPath: '$(Build.SourcesDirectory)/scripts/extract-vm-identity.ps1'
+    arguments: >
+      -PlanPath "$(Pipeline.Workspace)/${{ parameters.planFileName }}"
+      -ResultPath "$(Build.ArtifactStagingDirectory)/${{ parameters.resultFileName }}"
+  name: Extractdata
+
+- task: AzureCLI@2
+  displayName: "Register DevOps Agent on Target VMs"
+  inputs:
+    azureSubscription: ${{ parameters.serviceconnection }}
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      $vmListString = "$(Extractdata.vmList)"
+      $vmList = $vmListString -split "," | ForEach-Object { $_.Trim() }
+
+      foreach ($vm in $vmList) {
+        Write-Host "Registering agent on $vm..."
+
+        $scriptLines = @(
+          "Set-Location 'C:\\_bits\\commonforwebandapp\\devopsagent'",
+          ".\\config.cmd --unattended --environment --environmentname $(Extractdata.environmentName) --agent $vm --runasservice --work '_work' --url 'https://dev.azure.com/${{ parameters.adoorg }}' --projectname '${{ parameters.adoproject }}' --auth PAT --token ${{ parameters.adopatToken }}"
+        )
+
+        az vm run-command invoke `
+          --resource-group $(Extractdata.resourceGroupName) `
+          --name $vm `
+          --command-id RunPowerShellScript `
+          --scripts $scriptLines
+      }
+    failOnStandardError: false
+
+
+- task: PublishPipelineArtifact@1
+  displayName: "Publish ${{ parameters.artifactName }} Identity Info"
+  inputs:
+    targetPath: "$(Build.ArtifactStagingDirectory)/${{ parameters.resultFileName }}"
+    artifact: ${{ parameters.artifactName }}
+    publishLocation: "pipeline"
+
+- task: SqlAzureDacpacDeployment@1
+  displayName: 'Run SQL DACPAC Setup for All VMs'
+  inputs:
+    azureSubscription: ${{ parameters.serviceconnection }}
+    ServerName: '$(Extractdata.sqlMiFqdnForDacpac)'
+    DatabaseName: 'master'
+    authenticationType: 'servicePrincipal'
+    deployType: 'SqlTask'
+    SqlFile: '$(Build.SourcesDirectory)/scripts/sqlloginlanguage.sql'
+    SqlAdditionalArguments: '-Variable "servicePrincipalList=$(Extractdata.vmList)"'
+    IpDetectionMethod: 'AutoDetect'
+
+# CREATE USER [SPN] FROM EXTERNAL PROVIDER;
+# ALTER ROLE db_owner ADD MEMBER [SPN];
+# the Service principal name (SPN) that is used in the dacpac task must be present in the SQL MI with db_owner role.

@@ -1,0 +1,142 @@
+parameters:
+  - name: subscription
+  - name: environment
+  
+
+jobs:
+  - job: deployStorageAccount
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} storage account"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/storage"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+          backendAzureRmUseEnvironmentVariablesForAuthentication: true
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(storagekey)"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform validate for ${{ parameters.environment }} storage account"
+        inputs:
+          provider: "azurerm"
+          command: "validate"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/storage"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform plan for ${{ parameters.environment }} storage account"
+        inputs:
+          provider: "azurerm"
+          command: "plan"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/storage"
+          commandOptions: >
+            -var-file="${{ parameters.environment }}.tfvars"
+            -out storagetf.plan
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"
+
+      
+      - task: TerraformTaskV4@4
+        name: TerraformShow
+        displayName: Terraform Show
+        inputs:
+          provider: 'azurerm'
+          environmentServiceNameAzureRM: '${{ parameters.subscription }}'
+          command: 'show'
+          commandOptions: 'storagetf.plan'
+          outputTo: 'file'
+          outputFormat: 'json'
+          fileName: '$(Build.ArtifactStagingDirectory)/storageplan.tfgraph'
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/storage"
+
+
+      # Publish Plan File as Artifact
+      # - task: PublishPipelineArtifact@1
+      #   displayName: "Publish Terraform Plan"
+      #   inputs:
+      #     targetPath: "$(build.sourcesDirectory)/Terraform/storage/storagetf.plan"
+      #     artifact: 'storagetf.plan'
+      #     publishLocation: 'pipeline'
+
+      # Publish Graph File as Artifact
+      - task: PublishPipelineArtifact@1
+        displayName: "Publish Terraform Graph"
+        inputs:
+          targetPath: "$(Build.ArtifactStagingDirectory)/storageplan.tfgraph"
+          artifact: 'storageplan.tfgraph'
+          publishLocation: 'pipeline'
+
+
+  - job: waitForApproval_storage
+    dependsOn: deployStorageAccount
+    displayName: Manual Validation before terraform_apply
+    pool: server
+    timeoutInMinutes: 60
+    steps:
+      - task: ManualValidation@1
+        timeoutInMinutes: 60
+        inputs:
+          notifyUsers: |
+            ashish.bhatt@iris.co.uk
+          instructions: "Please validate the build configuration and resume"
+          onTimeout: "reject"
+          allowApproversToApproveTheirOwnRuns: true
+
+  - job: TeraformApply_storage
+    dependsOn: waitForApproval_storage
+    displayName: "Terraform apply for ${{ parameters.environment }} storage"
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} storage"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/storage"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(storagekey)"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform apply for ${{ parameters.environment }} storage"
+        inputs:
+          provider: "azurerm"
+          command: "apply"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/storage"
+          commandOptions: >
+            -auto-approve
+            -var-file="${{ parameters.environment }}.tfvars"
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"

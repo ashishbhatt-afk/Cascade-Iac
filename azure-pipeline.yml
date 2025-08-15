@@ -1,0 +1,205 @@
+trigger: none
+
+pool:
+  vmImage: "windows-latest"
+
+parameters:
+  - name: Environment
+    type: string
+    default: "select the environment"
+    values:
+      - "dev"
+      - "staging"
+      - "prod"
+
+  - name: deployRSV
+    type: boolean
+    default: false
+
+  - name: deploycoreinfra
+    type: boolean
+    default: false
+  
+  - name: deployvms
+    type: boolean
+    default: false
+
+  - name: deployIISServer
+    type: boolean
+    default: false
+
+  - name: deploySQLMI
+    type: boolean
+    default: false
+
+  # - name: deploySQLServer
+  #   type: boolean
+  #   default: false
+
+  - name: deployAVD
+    type: boolean
+    default: false
+
+  - name: deployAPPServer
+    type: boolean
+    default: false
+
+  - name: deployRabbitMQ
+    type: boolean
+    default: false
+
+  - name: deployStorageAccount
+    type: boolean
+    default: false
+  
+variables:
+  - template: vars/vars-global.yml
+
+stages:
+
+  - stage: "DeployAVD"
+    displayName: "Deploy the AVD"
+    condition: eq('${{ parameters.deployAVD }}', true) 
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+    jobs: 
+      - job: deployAVD
+        displayName: "Deploy AVD"
+      - template: Terraform/avdserver/avdserver.yml
+        parameters:
+          subscription: $(subscription)
+          # environment: ${{ parameters.Environment }}
+
+  - stage: "DeployRSV"
+    displayName: "Deploy RSV for ${{ parameters.Environment }}"
+    condition: eq('${{ parameters.deployRSV }}', true)
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+    jobs:
+      - template: Terraform/backup-rsv/rsv.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}
+
+  - stage: "DeployCoreInfra"
+    displayName: "Deploy Core Infrastructure for ${{ parameters.Environment }}"
+    condition: eq('${{ parameters.deploycoreinfra }}', true)
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+    jobs:
+      - template: Terraform/core/core.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}
+
+  - stage: "DeployStorageAccount"
+    displayName: "Deploy the Storage Account"
+    condition: eq('${{ parameters.deployStorageAccount }}', true)
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+    jobs:
+      - template: Terraform/storage/storage.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}
+
+  - stage: "generatevariables"
+    displayName: "generate variables"
+    condition: eq('${{ parameters.deployvms }}', true)
+    jobs:
+      - job: generatevariables        
+        steps:
+        - task: AzureCLI@2
+          displayName: Generate variable task
+          inputs:
+              azureSubscription: '$(subscription)'
+              scriptType: 'pscore'
+              scriptLocation: 'scriptPath'
+              scriptPath: '$(Build.SourcesDirectory)/scripts/vm_count_new.ps1'
+              arguments: ->
+                -environment "${{ parameters.Environment }}"
+                -webserversToDeploy $(webservers_to_deploy)
+                -sqlserversToDeploy $(sqlservers_to_deploy)
+                -appserversToDeploy $(appservers_to_deploy)
+                -sqlmiToDeploy $(sqlmi_to_deploy)
+                -rbqToDeploy $(rbqservers_to_deploy)
+          name: genvar
+
+  - stage: "DeployIISvms"
+    dependsOn: generatevariables
+    displayName: "Deploy the IIS VMs"
+    condition: and(eq('${{ parameters.deployvms }}', true), eq(dependencies.generatevariables.result, 'Succeeded'), eq('${{ parameters.deployIISServer }}', true))
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+      - name: WebServerCount
+        value: $[ stageDependencies.generatevariables.generatevariables.outputs['genvar.NewWebServersToDeploy'] ]
+    jobs:   
+      - job: deployIISvms
+        displayName: "Deploy IIS VMs"
+        condition: and(eq('${{ parameters.deployIISServer }}', true), succeeded())
+      - template: Terraform/IISserver/IISserver.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}
+          iisvmcount: $(WebServerCount)
+
+  - stage: "DeployAPPvms"
+    dependsOn: generatevariables
+    displayName: "Deploy the APP VMs"
+    condition: and(eq('${{ parameters.deployvms }}', true), eq(dependencies.generatevariables.result, 'Succeeded'), eq('${{ parameters.deployAPPServer }}',true))
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+      - name: AppServerCount
+        value: $[ stageDependencies.generatevariables.generatevariables.outputs['genvar.NewAppServersToDeploy'] ]  
+    jobs: 
+      - job: deployAPPvms
+        displayName: "Deploy APP VMs"
+      - template: Terraform/appserver/appserver.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}
+          appvmcount: $(AppServerCount)
+
+  # - stage: "DeployRabbitMQ"
+  #   dependsOn: generatevariables
+  #   displayName: "Deploy the RabbitMQ" 
+  #   condition: and(eq('${{ parameters.deployvms }}', true), eq(dependencies.generatevariables.result, 'Succeeded'), eq('${{ parameters.deployRabbitMQ }}',true))
+  #   variables:
+  #     - group: "cascade to azure global"
+  #     - group: "cascade to azure ${{ parameters.Environment }}"
+  #     - template: vars/vars-global.yml
+  #     - template: vars/vars-${{ parameters.Environment }}.yml
+  #     - name: RabbitMQCount
+  #       value: $[ stageDependencies.generatevariables.generatevariables.outputs['genvar.NewRBQServersToDeploy'] ]
+  #   jobs:
+  #     - job: deployRabbitMQ
+  #       displayName: "Deploy RabbitMQ"
+  #     - template: Terraform/RBQServer/Rabbitmq.yml
+  #       parameters:
+  #         subscription: $(subscription)
+  #         environment: ${{ parameters.Environment }}
+  #         rbqvmcount: $(RabbitMQCount)
+
+  - stage: "DeploySQLMI"
+    dependsOn: generatevariables
+    displayName: "Deploy the SQL MI"
+    condition: and(eq('${{ parameters.deployvms }}', true), eq(dependencies.generatevariables.result, 'Succeeded'), eq('${{ parameters.deploySQLMI }}',true))
+    variables:
+      - template: vars/vars-global.yml
+      - template: vars/vars-${{ parameters.Environment }}.yml
+      - name: SQLMICount
+        value: $[ stageDependencies.generatevariables.generatevariables.outputs['genvar.NewSQLMIsToDeploy'] ]
+    jobs: 
+      - job: deploySQLMI
+        displayName: "Deploy SQL MI"
+      - template: Terraform/ManagedInstance/ManagedInstance.yml
+        parameters:
+          subscription: $(subscription)
+          environment: ${{ parameters.Environment }}
+          sqlmicount: $(SQLMICount)

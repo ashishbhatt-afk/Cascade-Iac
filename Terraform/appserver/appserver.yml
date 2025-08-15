@@ -1,0 +1,195 @@
+parameters:
+  - name: subscription
+  - name: environment
+  - name: appvmcount
+
+jobs:
+  - job: Plan_APP_Server
+    dependsOn: deployAPPvms
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} APP server"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/appserver"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "app_count=${{ parameters.appvmcount }}"
+          backendAzureRmUseEnvironmentVariablesForAuthentication: true
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(appkey)"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform validate for ${{ parameters.environment }} APP server"
+        inputs:
+          provider: "azurerm"
+          command: "validate"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/appserver"
+
+      - task: DownloadPipelineArtifact@2
+        displayName: "Download Image ID Artifact"
+        inputs:
+          source: 'specific'                     # pipeline artifact mode
+          project: 'Cascade Underlying Platform'
+          pipeline: 296
+          runVersion: 'latestFromBranch'
+          runBranch: 'refs/heads/main'
+          artifact: 'image-id'
+          path: '$(Pipeline.Workspace)'
+
+      - task: PowerShell@2
+        displayName: "Set IMAGE_ID variable"
+        inputs:
+          targetType: filePath
+          filePath: $(build.sourcesDirectory)/scripts/set-image-id.ps1
+          pwsh: true
+          arguments: >
+            -FilePath "$(Pipeline.Workspace)/image-id.txt"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform plan for ${{ parameters.environment }} APP server"
+        inputs:
+          provider: "azurerm"
+          command: "plan"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/appserver"
+          commandOptions: >
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "app_count=${{ parameters.appvmcount }}"
+            -var "source_image_id=$(IMAGE_ID)"
+            -out APPtf.plan
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"
+
+      - task: TerraformTaskV4@4
+        name: TerraformShow
+        displayName: Terraform Show
+        inputs:
+          provider: 'azurerm'
+          environmentServiceNameAzureRM: '${{ parameters.subscription }}'
+          command: 'show'
+          commandOptions: 'APPtf.plan'
+          outputTo: 'file'
+          outputFormat: 'json'
+          fileName: '$(Build.ArtifactStagingDirectory)/APPplan.json'
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/appserver"
+          
+      - task: PowerShell@2
+        displayName: "Sanitize Terraform Plan with PowerShell"
+        inputs:
+          filePath: scripts/sanitize-tfplan.ps1
+          pwsh: true
+          arguments: >
+            -JsonFile "$(Build.ArtifactStagingDirectory)/APPplan.json"
+            -TfgraphFile "$(Build.ArtifactStagingDirectory)/APPplan.tfgraph"
+
+      - task: CopyFiles@2
+        displayName: "Prepare Artifact Folder"
+        inputs:
+          SourceFolder: '$(Build.ArtifactStagingDirectory)'
+          Contents: |
+            APPplan.tfgraph
+            APPplan.json
+          TargetFolder: '$(Build.ArtifactStagingDirectory)/APP-Plan-Output'
+
+      - task: PublishPipelineArtifact@1
+        displayName: "Publish Combined Terraform Plan Artifacts"
+        inputs:
+          targetPath: '$(Build.ArtifactStagingDirectory)/APP-Plan-Output'
+          artifact: 'APP Plan'
+          publishLocation: 'pipeline'
+
+  - job: waitForApproval_APP
+    dependsOn: Plan_APP_Server
+    displayName: Manual Validation before terraform_apply
+    pool: server
+    timeoutInMinutes: 60
+    steps:
+      - task: ManualValidation@1
+        timeoutInMinutes: 60
+        inputs:
+          notifyUsers: |
+            ashish.bhatt@iris.co.uk
+          instructions: "Please validate the build configuration and resume"
+          onTimeout: "reject"
+          allowApproversToApproveTheirOwnRuns: true
+
+  - job: TeraformApply_app
+    dependsOn: waitForApproval_APP
+    displayName: "Terraform apply for ${{ parameters.environment }} APP server"
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} APP server"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/appserver"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "app_count=${{ parameters.appvmcount }}"
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(appkey)"
+
+      - task: DownloadPipelineArtifact@2
+        displayName: "Download Image ID Artifact"
+        inputs:
+          source: 'specific'                     # pipeline artifact mode
+          project: 'Cascade Underlying Platform'
+          pipeline: 296
+          runVersion: 'latestFromBranch'
+          runBranch: 'refs/heads/main'
+          artifact: 'image-id'
+          path: '$(Pipeline.Workspace)'
+
+      - task: PowerShell@2
+        displayName: "Set IMAGE_ID variable"
+        inputs:
+          targetType: filePath
+          filePath: $(build.sourcesDirectory)/scripts/set-image-id.ps1
+          pwsh: true
+          arguments: >
+            -FilePath "$(Pipeline.Workspace)/image-id.txt"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform apply for ${{ parameters.environment }} APP server"
+        inputs:
+          provider: "azurerm"
+          command: "apply"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/appserver"
+          commandOptions: >
+            -auto-approve
+            -var-file="${{ parameters.environment }}.tfvars"
+            -var "app_count=${{ parameters.appvmcount }}"
+            -var "source_image_id=$(IMAGE_ID)"            
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"

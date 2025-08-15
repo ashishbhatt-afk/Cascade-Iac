@@ -1,0 +1,108 @@
+parameters:
+  - name: subscription
+  - name: environment
+
+jobs:
+  - job: Plan_SQL_MI
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} SQL MI"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/ManagedInstance"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+          backendAzureRmUseEnvironmentVariablesForAuthentication: true
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(sqlmikey)"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform validate for ${{ parameters.environment }} SQL MI"
+        inputs:
+          provider: "azurerm"
+          command: "validate"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/ManagedInstance"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform plan for ${{ parameters.environment }} SQL MI"
+        inputs:
+          provider: "azurerm"
+          command: "plan"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/ManagedInstance"
+          commandOptions: >
+            -var-file="${{ parameters.environment }}.tfvars"
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"
+
+  - job: waitForApproval_SQLMI
+    dependsOn: Plan_SQL_MI
+    displayName: Manual Validation before terraform_apply
+    pool: server
+    timeoutInMinutes: 60
+    steps:
+      - task: ManualValidation@1
+        timeoutInMinutes: 60
+        inputs:
+          notifyUsers: |
+            ashish.bhatt@iris.co.uk
+          instructions: "Please validate the build configuration and resume"
+          onTimeout: "reject"
+          allowApproversToApproveTheirOwnRuns: true
+
+  - job: TeraformApply_SQLMI
+    dependsOn: waitForApproval_SQLMI
+    displayName: "Terraform apply for ${{ parameters.environment }} SQL MI"
+    steps:
+      - task: terraformInstaller@0
+        inputs:
+          terraformVersion: "latest"
+
+      - template: ../../include-transformjson.yml
+        parameters:
+          sourcePath: ./params/run.jsonc
+          transformations: |
+            {
+              "envShort": "${{ parameters.environment }}",
+            }
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform init for ${{ parameters.environment}} SQL MI"
+        inputs:
+          provider: "azurerm"
+          command: "init"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/ManagedInstance"
+          commandOptions: >
+            -reconfigure
+            -var-file="${{ parameters.environment }}.tfvars"
+          backendServiceArm: "${{ parameters.subscription }}"
+          backendAzureRmResourceGroupName: "rg-statefile-poc-cascade"
+          backendAzureRmStorageAccountName: "stterraformpocbackend"
+          backendAzureRmContainerName: "tfbackend"
+          backendAzureRmKey: "$(sqlmikey)"
+
+      - task: TerraformTaskV4@4
+        displayName: "terraform apply for ${{ parameters.environment }} SQL MI"
+        inputs:
+          provider: "azurerm"
+          command: "apply"
+          workingDirectory: "$(build.sourcesDirectory)/Terraform/ManagedInstance"
+          commandOptions: >
+            -auto-approve
+            -var-file="${{ parameters.environment }}.tfvars"
+          environmentServiceNameAzureRM: "${{ parameters.subscription }}"

@@ -1,0 +1,9 @@
+variables:
+  subscription: HCM Cascade (Dev) # Azure Service Connection
+  product: cascade
+  avdkey: avd.terraform.tfstate
+  adoorg: iris-hr
+  adoproject: Cascade Underlying Platform
+
+
+
