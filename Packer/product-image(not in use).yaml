@@ -1,0 +1,58 @@
+trigger:
+  - none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+parameters:
+  - name: product
+    displayName: 'Product Type'
+    type: string
+    default: 'commonforwebandapp'
+    values:
+      - 'commonforwebandapp'
+      - 'rdsserver'
+
+variables:
+  - group: global
+  
+  - name: acrName
+    value: packerimage
+
+  - name: reponame
+    value: repo
+
+  - name: tag
+    value: latest
+
+  - name: resourceGroup
+    value: rg-c2a-images
+
+  - name: containerName
+    value: testcontainer    
+
+steps:
+  - task: AzureCLI@2
+    displayName: "Run Docker Container from ACR"
+    inputs:
+      azureSubscription: 'scforacr'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        az acr login --name $(acrName)
+        docker run --env PKR_VAR_product=${{ parameters.product }} $(acrName).azurecr.io/$(reponame):$(tag)
+
+  # - task: AzureCLI@2
+  #   displayName: "Deploy Container Instance"
+  #   inputs:
+  #     azureSubscription: 'scforacr'
+  #     scriptType: 'bash'
+  #     scriptLocation: 'inlineScript'
+  #     inlineScript: |
+  #       az container create \
+  #         --resource-group $(resourceGroup) \
+  #         --name $(containerName) \
+  #         --image $(acrName).azurecr.io/$(imageName):$(tag) \
+  #         --registry-login-server $(acrName).azurecr.io \
+  #         --registry-username packerimage \
+  #         --registry-password $(acrpassword) \

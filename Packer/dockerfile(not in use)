@@ -1,0 +1,17 @@
+FROM hashicorp/packer:latest
+
+WORKDIR /app
+
+# Add build argument for storage account key
+# Product will be set at runtime by the execution pipeline
+ARG STORAGE_ACCOUNT_KEY=""
+ENV PKR_VAR_storageaccountkey=$STORAGE_ACCOUNT_KEY
+
+COPY . .
+
+RUN packer init .
+
+# RUN chmod +x build.sh
+
+# Modified entrypoint to use environment variables
+ENTRYPOINT ["sh", "-c", "packer build -var-file=secrets.pkrvars.hcl -var=\"product=$PKR_VAR_product\" -var=\"storageaccountkey=$PKR_VAR_storageaccountkey\" ."]

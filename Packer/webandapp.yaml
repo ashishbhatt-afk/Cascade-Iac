@@ -1,0 +1,72 @@
+trigger:
+- none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+parameters:
+  - name: product
+    displayName: 'Product Type'
+    type: string
+    default: 'commonforwebandapp'
+
+variables:
+  - group: cascade to azure global
+  - name: currentBranch
+    value: $(Build.SourceBranchName)
+  - name: buildId
+    value: $(Build.BuildId)
+  
+
+
+steps:
+  - task: Bash@3
+    displayName: "Install Packer"
+    inputs:
+      targetType: 'inline'
+      script: |
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+        sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+        sudo apt-get update && sudo apt-get install -y packer
+        packer --version
+
+  - task: Bash@3
+    displayName: "Initialize Packer"
+    inputs:
+      targetType: 'inline'
+      script: |
+        packer init .
+        
+  - task: Bash@3
+    displayName: "Run Packer Build"
+    inputs:
+      targetType: 'inline'
+      script: |
+        export PKR_VAR_product="${{ parameters.product }}"
+        export PKR_VAR_storageaccountkey="$(storageAccountKey)"
+        export PKR_VAR_client_secret="$(clientSecret)"
+        export PKR_VAR_branch="$(currentBranch)"
+        export PKR_VAR_build_id="$(buildId)"
+        echo "Building image for product: $PKR_VAR_product"
+        packer build . | tee packer-output.log
+
+  - task: Bash@3
+    displayName: 'Extract ManagedImageId'
+    inputs:
+      targetType: 'inline'
+      script: |
+        image_id=$(grep "ManagedImageId:" packer-output.log | sed 's/^.*ManagedImageId: //')
+        echo "Extracted image ID: $image_id"
+        echo "$image_id" > image-id.txt
+
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish Packer Log'
+    inputs:
+      PathtoPublish: 'packer-output.log'
+      ArtifactName: 'packer-logs'
+
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish Image ID'
+    inputs:
+      PathtoPublish: 'image-id.txt'
+      ArtifactName: 'image-id'

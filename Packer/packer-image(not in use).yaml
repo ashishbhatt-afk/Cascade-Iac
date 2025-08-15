@@ -1,0 +1,33 @@
+trigger:
+- none
+
+pool:
+  vmImage: 'ubuntu-latest'  
+
+variables:
+  - group: global
+  
+  - name: acrName
+    value: packerimage
+    
+  - name: reponame
+    value: repo
+    
+  - name: tag
+    value: latest
+    
+  - name: storageAccountKey
+    value: ''  # Will be set in pipeline UI or variable group
+
+steps:
+- task: Docker@2
+  displayName: 'Build and Push Docker Image'
+  inputs:
+    containerRegistry: 'packerimagesc'
+    repository: '$(reponame)'
+    command: 'buildAndPush'
+    Dockerfile: '**/dockerfile'
+    buildContext: '.'
+    tags: '$(tag)'
+    arguments: '--build-arg STORAGE_ACCOUNT_KEY=$(storageAccountKey)'
+
